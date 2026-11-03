@@ -172,7 +172,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: TheMaxMur/RS-Key
+          repository: kleenex-aloof/RS-Key
           ref: ${{ steps.version.outputs.ref }}
 
       - uses: DeterminateSystems/nix-installer-action@v22
