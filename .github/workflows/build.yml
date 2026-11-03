@@ -1,0 +1,359 @@
+name: Build RS-Key firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      RS_KEY_VERSION:
+        description: Git ref to build — tag (v0.3.9), branch, commit, or "latest"
+        type: string
+        default: latest
+        required: false
+      BOARD:
+        description: Board hardware preset (custom = manual config)
+        type: choice
+        options:
+          - waveshare-rp2350-one
+          - seeed-xiao-rp2350
+          - pimoroni-tiny-2350
+          - waveshare-rp2350-zero-cm
+          - tenstar-rp2350-usb
+          - waveshare-rp2350-touch-lcd-2-8
+          - custom
+        default: waveshare-rp2350-one
+        required: true
+      VIDPID:
+        description: USB identity preset
+        type: choice
+        options:
+          - RSKey
+          - Yubikey5
+          - YubikeyNeo
+          - YubiHSM
+          - NitroHSM
+          - NitroFIDO2
+          - NitroStart
+          - NitroPro
+          - Nitro3
+          - Gnuk
+          - GnuPG
+          - Pico
+          - Dev
+        default: RSKey
+        required: true
+      FW_VERSION:
+        description: Firmware version string (e.g. 5.7.4)
+        type: string
+        default: '5.7.4'
+        required: false
+      PRESENCE_PIN:
+        description: User presence GPIO (bootsel or 0..=29)
+        type: string
+        default: bootsel
+        required: false
+      PRESENCE_ACTIVE_HIGH:
+        description: Presence button polarity
+        type: choice
+        options:
+          - ''
+          - '0'
+          - '1'
+        default: ''
+        required: false
+      FLASH_SIZE:
+        description: Override board flash size (4M, 8M, 16M, 2M)
+        type: string
+        default: ''
+        required: false
+      KVMAIN:
+        description: KV partition size override (e.g. 896K)
+        type: string
+        default: ''
+        required: false
+      LED_KIND:
+        description: LED driver backend override
+        type: choice
+        options:
+          - ''
+          - ws2812
+          - gpio
+          - pimoroni
+          - none
+        default: ''
+        required: false
+      LED_PIN:
+        description: Status LED GPIO override (0..=29)
+        type: string
+        default: ''
+        required: false
+      LED_POWER_PIN:
+        description: LED power gate GPIO (none or 0..=29)
+        type: string
+        default: ''
+        required: false
+      LED_ORDER:
+        description: WS2812 wire byte order override
+        type: choice
+        options:
+          - ''
+          - rgb
+          - grb
+        default: ''
+        required: false
+      USR_LED_PIN:
+        description: Nuisance user LED GPIO (none or 0..=29)
+        type: string
+        default: ''
+        required: false
+      USR_LED_ACTIVE_HIGH:
+        description: User LED polarity
+        type: choice
+        options:
+          - ''
+          - '0'
+          - '1'
+        default: ''
+        required: false
+      MAX_LEDS:
+        description: Max addressable LEDs (1..=64)
+        type: string
+        default: ''
+        required: false
+      XOSC_DELAY_MULT:
+        description: Crystal startup delay multiplier (1..=1024)
+        type: string
+        default: ''
+        required: false
+      USB_VID:
+        description: Raw USB vendor ID override (0xHHHH)
+        type: string
+        default: ''
+        required: false
+      USB_PID:
+        description: Raw USB product ID override (0xHHHH)
+        type: string
+        default: ''
+        required: false
+      USB_MANUFACTURER:
+        description: USB descriptor manufacturer string override
+        type: string
+        default: ''
+        required: false
+      ENV_EXTRA:
+        description: 'Additional env vars: KEY=VAL pairs (space-separated, e.g. USB_PRODUCT="My Key" WAKE_PIN=25)'
+        type: string
+        default: ''
+        required: false
+      FEATURES:
+        description: 'Cargo features, comma-separated (e.g. no-touch,display,fips-profile)'
+        type: string
+        default: ''
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve RS-Key version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ inputs.RS_KEY_VERSION }}" = "latest" ]; then
+            tag=$(gh api repos/TheMaxMur/RS-Key/releases/latest --jq .tag_name)
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+            echo "Resolved RS-Key ref: $tag"
+          else
+            echo "ref=${{ inputs.RS_KEY_VERSION }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: TheMaxMur/RS-Key
+          ref: ${{ steps.version.outputs.ref }}
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Configure build environment
+        env:
+          ENV_EXTRA: ${{ inputs.ENV_EXTRA }}
+        run: |
+          # Board presets — hardware defaults
+          case "${{ inputs.BOARD }}" in
+            waveshare-rp2350-one)
+              echo "FLASH_SIZE=4M"    >> "$GITHUB_ENV"
+              echo "LED_KIND=ws2812"  >> "$GITHUB_ENV"
+              echo "LED_PIN=16"       >> "$GITHUB_ENV"
+              echo "LED_ORDER=rgb"    >> "$GITHUB_ENV"
+              ;;
+            seeed-xiao-rp2350)
+              echo "FLASH_SIZE=2M"     >> "$GITHUB_ENV"
+              echo "KVMAIN=896K"       >> "$GITHUB_ENV"
+              echo "LED_KIND=ws2812"   >> "$GITHUB_ENV"
+              echo "LED_PIN=22"        >> "$GITHUB_ENV"
+              echo "LED_ORDER=grb"     >> "$GITHUB_ENV"
+              echo "LED_POWER_PIN=23"  >> "$GITHUB_ENV"
+              echo "USR_LED_PIN=25"    >> "$GITHUB_ENV"
+              ;;
+            pimoroni-tiny-2350)
+              echo "FLASH_SIZE=8M"     >> "$GITHUB_ENV"
+              echo "LED_KIND=pimoroni" >> "$GITHUB_ENV"
+              ;;
+            waveshare-rp2350-zero-cm)
+              # LED GPIO not documented upstream — default GPIO16, rgb is a guess
+              echo "FLASH_SIZE=2M"     >> "$GITHUB_ENV"
+              echo "KVMAIN=896K"       >> "$GITHUB_ENV"
+              echo "LED_KIND=ws2812"   >> "$GITHUB_ENV"
+              echo "LED_PIN=16"        >> "$GITHUB_ENV"
+              echo "LED_ORDER=rgb"     >> "$GITHUB_ENV"
+              ;;
+            tenstar-rp2350-usb)
+              echo "FLASH_SIZE=16M"    >> "$GITHUB_ENV"
+              echo "LED_KIND=ws2812"   >> "$GITHUB_ENV"
+              echo "LED_PIN=22"        >> "$GITHUB_ENV"
+              echo "LED_ORDER=grb"     >> "$GITHUB_ENV"
+              ;;
+            waveshare-rp2350-touch-lcd-2-8)
+              echo "FLASH_SIZE=16M"    >> "$GITHUB_ENV"
+              echo "LED_KIND=none"     >> "$GITHUB_ENV"
+              ;;
+          esac
+
+          # User env var overrides — set via GITHUB_ENV if input is non-empty.
+          # RS-Key's build.rs uses option_env!, so empty string would shadow
+          # the upstream default. Skip empty inputs to let default/board preset win.
+          set_var() { if [ -n "$2" ]; then echo "$1=$2" >> "$GITHUB_ENV"; fi; }
+
+          set_var VIDPID               "${{ inputs.VIDPID }}"
+          set_var FW_VERSION           "${{ inputs.FW_VERSION }}"
+          set_var XOSC_DELAY_MULT      "${{ inputs.XOSC_DELAY_MULT }}"
+          set_var FLASH_SIZE           "${{ inputs.FLASH_SIZE }}"
+          set_var KVMAIN               "${{ inputs.KVMAIN }}"
+          set_var LED_KIND             "${{ inputs.LED_KIND }}"
+          set_var LED_PIN              "${{ inputs.LED_PIN }}"
+          set_var LED_POWER_PIN        "${{ inputs.LED_POWER_PIN }}"
+          set_var LED_ORDER            "${{ inputs.LED_ORDER }}"
+          set_var MAX_LEDS             "${{ inputs.MAX_LEDS }}"
+          set_var PRESENCE_PIN         "${{ inputs.PRESENCE_PIN }}"
+          set_var PRESENCE_ACTIVE_HIGH "${{ inputs.PRESENCE_ACTIVE_HIGH }}"
+          set_var USR_LED_PIN          "${{ inputs.USR_LED_PIN }}"
+          set_var USR_LED_ACTIVE_HIGH  "${{ inputs.USR_LED_ACTIVE_HIGH }}"
+          set_var USB_VID              "${{ inputs.USB_VID }}"
+          set_var USB_PID              "${{ inputs.USB_PID }}"
+          set_var USB_MANUFACTURER     "${{ inputs.USB_MANUFACTURER }}"
+
+          # ENV_EXTRA — space-separated KEY=VAL pairs for rare knobs
+          # (e.g. USB_PRODUCT="My Key" WAKE_PIN=25 WAKE_ACTIVE_HIGH=1
+          #  FAKE_MKEK=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+          if [ -n "$ENV_EXTRA" ]; then
+            eval "set -- $ENV_EXTRA"
+            for pair do
+              echo "${pair%%=*}=${pair#*=}" >> "$GITHUB_ENV"
+            done
+          fi
+
+      - name: Build firmware
+        run: |
+          features="${{ inputs.FEATURES }}"
+          if [ -n "$features" ]; then
+            nix develop -c cargo build --release -p firmware --features "$features"
+          else
+            nix develop -c cargo build --release -p firmware
+          fi
+
+      - name: Convert ELF to UF2
+        run: |
+          nix develop -c picotool uf2 convert \
+            target/thumbv8m.main-none-eabihf/release/firmware -t elf \
+            firmware.uf2
+          sha256sum firmware.uf2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: firmware.uf2
+
+      - name: Check for signing key
+        id: check-key
+        env:
+          SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
+        run: |
+          if [ -n "$SIGNING_KEY" ]; then
+            echo "$SIGNING_KEY" > /tmp/secure_boot_key.pem
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Signing key found — will seal firmware"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No signing key — skipping seal"
+          fi
+
+      - name: Seal firmware
+        if: steps.check-key.outputs.exists == 'true'
+        run: |
+          nix develop -c picotool seal --sign --hash firmware.uf2 firmware-sealed.uf2 \
+            /tmp/secure_boot_key.pem otp_secureboot.json --major 1 --minor 0
+          sha256sum firmware-sealed.uf2
+
+      - if: steps.check-key.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-sealed
+          path: |
+            firmware-sealed.uf2
+            otp_secureboot.json
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ steps.version.outputs.ref }}
+        run: |
+          tag="firmware-$(date -u +%Y%m%dT%H%M%SZ)"
+
+          features="${{ inputs.FEATURES }}"
+          [ -z "$features" ] && features="(default)"
+
+          assets="firmware.uf2"
+
+          {
+            echo "Built from [TheMaxMur/RS-Key](https://github.com/TheMaxMur/RS-Key) @ $REF"
+            echo ""
+            echo "Board: ${{ inputs.BOARD }}"
+            echo "VIDPID: ${{ inputs.VIDPID }}"
+            echo "FW_VERSION: ${{ inputs.FW_VERSION }}"
+            echo "Features: $features"
+            echo ""
+            echo "Flash via BOOTSEL mode: \`picotool load -v firmware.uf2\` or drag-and-drop."
+          } > /tmp/release-notes.md
+
+          if [ -f firmware-sealed.uf2 ]; then
+            assets="$assets firmware-sealed.uf2 otp_secureboot.json"
+            {
+              echo ""
+              echo "---"
+              echo ""
+          echo "### Secure boot"
+          echo "firmware-sealed.uf2 — signed with your signing key."
+          echo "otp_secureboot.json — OTP boot-key fingerprint for fuse provisioning."
+          echo ""
+          echo "Secure boot setup is **irreversible**. Follow the upstream production guide:"
+          echo "https://github.com/TheMaxMur/RS-Key/blob/main/docs/production.md"
+            } >> /tmp/release-notes.md
+          fi
+
+          gh release create "$tag" \
+            --repo "${{ github.repository }}" \
+            --title "RS-Key firmware $tag" \
+            --notes-file /tmp/release-notes.md \
+            $assets
