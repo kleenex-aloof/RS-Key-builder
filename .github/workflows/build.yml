@@ -163,7 +163,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ inputs.RS_KEY_VERSION }}" = "latest" ]; then
-            tag=$(gh api repos/TheMaxMur/RS-Key/releases/latest --jq .tag_name)
+            tag=$(gh api repos/kleenex-aloof/RS-Key/releases/latest --jq .tag_name)
             echo "ref=$tag" >> "$GITHUB_OUTPUT"
             echo "Resolved RS-Key ref: $tag"
           else
